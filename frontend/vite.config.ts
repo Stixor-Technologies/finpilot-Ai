@@ -41,17 +41,24 @@ export default defineConfig(({ command, mode }) => {
       ],
     },
     server: {
-      host: "::",
+      // true (not "::") so the dev server binds 0.0.0.0 — required for the
+      // Vite server to be reachable from outside its own container when run
+      // via Docker Compose (see /frontend/Dockerfile + root docker-compose.yml).
+      host: true,
       port: 8080,
       proxy: {
-        // Slack connector service (backend/services/slack-connector) — direct dev proxy since
-        // there's no Gateway yet. See docs/superpowers/specs/2026-08-18-slack-connector-integration-design.md
         // Everything goes through the API Gateway (architecture §5.1), which is
         // the only component that verifies JWTs and the only port that needs to
         // be exposed. Point these at a service directly and you bypass both the
         // token check and the identity headers it injects.
+        //
+        // GATEWAY_INTERNAL_URL overrides the target for Docker Compose, where
+        // "localhost" would resolve to the frontend container itself rather
+        // than the gateway container — compose sets it to http://gateway:8000.
+        // Local (non-Docker) `bun run dev` has no such variable and keeps the
+        // plain localhost default.
         "/api/v1": {
-          target: "http://localhost:8000",
+          target: process.env.GATEWAY_INTERNAL_URL || "http://localhost:8000",
           changeOrigin: true,
         },
       },

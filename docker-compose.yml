@@ -1,12 +1,19 @@
+# Pinned explicitly (not left to default to the containing folder's name) so
+# moving this file from backend/infra/ to the repo root doesn't orphan the
+# existing infra_* named volumes — Compose derives volume names from the
+# project name, and losing that continuity would silently drop all local dev
+# data (signups, uploaded documents, etc.) on the next `docker compose up`.
+name: infra
+
 services:
   # The single front door (architecture §5.1). Verifies JWTs once, injects
   # identity headers, and routes to services. Only this port needs exposing.
   gateway:
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/gateway/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       AUTH_SERVICE_URL: http://auth:8001
       SLACK_CONNECTOR_URL: http://slack-connector:8010
@@ -25,6 +32,30 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+
+  # The React/TanStack Start dev server (see frontend/Dockerfile) — the last
+  # piece needed for `docker compose up` alone to bring up the whole app,
+  # UI included, with no separate `bun install`/`bun run dev` on the host.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Overrides vite.config.ts's dev-proxy target: inside this container
+      # "localhost" would mean the frontend container itself, not gateway.
+      GATEWAY_INTERNAL_URL: http://gateway:8000
+    depends_on:
+      - gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      # Live-reload against the host source tree...
+      - ./frontend:/app
+      # ...but keep node_modules the one bun install already built into the
+      # image, not whatever (or nothing) is on the host.
+      - /app/node_modules
 
   # Database per service (architecture report §4) — auth credentials never share
   # a database with connector data.
@@ -46,10 +77,10 @@ services:
     build:
       # Context is backend/ rather than the service directory because the image
       # needs libs/shared, which lives outside the service.
-      context: ..
+      context: ./backend
       dockerfile: services/auth/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@auth-db:5432/auth_db
       REDIS_URL: redis://redis:6379/6
@@ -245,10 +276,10 @@ services:
 
   slack-connector:
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/slack-connector/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@slack-connector-db:5432/slack_connector_db
       REDIS_URL: redis://redis:6379/3
@@ -274,11 +305,11 @@ services:
 
   slack-connector-worker:
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/slack-connector/Dockerfile
     command: celery -A app.worker.celery_app worker --loglevel=INFO --pool=solo --concurrency=1
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@slack-connector-db:5432/slack_connector_db
       REDIS_URL: redis://redis:6379/3
@@ -299,10 +330,10 @@ services:
 
   email-connector:
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/email-connector/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@email-connector-db:5432/email_connector_db
       REDIS_URL: redis://redis:6379/8
@@ -328,7 +359,7 @@ services:
 
   email-connector-worker:
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/email-connector/Dockerfile
     # -B embeds Celery Beat (the periodic-task scheduler) in this same
     # process. Fine for one worker instance; do NOT add -B if this service
@@ -337,7 +368,7 @@ services:
     # beat into its own single-replica service first.
     command: celery -A app.worker.celery_app worker -B --loglevel=INFO --pool=solo --concurrency=1
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@email-connector-db:5432/email_connector_db
       REDIS_URL: redis://redis:6379/8
@@ -362,10 +393,10 @@ services:
     # like ai-engine itself. Models are baked into the image at build time
     # (see the Dockerfile) — no runtime download, no hidden manual step.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/paddleocr/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     ports:
       - "8008:8008"
 
@@ -377,10 +408,10 @@ services:
     # invoice-service's AI_ENGINE_URL below), the same way
     # email-connector/slack-connector call INVOICE_SERVICE_URL directly.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/ai-engine/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       PADDLEOCR_SERVICE_URL: http://paddleocr:8008
     depends_on:
@@ -395,10 +426,10 @@ services:
     # established for the connectors' own Invoice Service bridge). This is
     # the first point that bridge actually resolves to a real service.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/invoice-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@invoice-service-db:5432/invoice_service_db
       S3_ENDPOINT_URL: http://minio:9000
@@ -432,10 +463,10 @@ services:
     # Email connectors. Port 8013: 8012 stays reserved for the planned
     # WhatsApp connector.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/documents-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@documents-service-db:5432/documents_service_db
       S3_ENDPOINT_URL: http://minio:9000
@@ -462,10 +493,10 @@ services:
     # docs/documents-and-vendors-plan.md §3). No MinIO dependency: this
     # service stores no files. Spend is derived from Invoice Service on read.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/vendors-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@vendors-service-db:5432/vendors_service_db
       INVOICE_SERVICE_URL: http://invoice-service:8002
@@ -485,10 +516,10 @@ services:
     # (Revenue Manager), read over HTTP for the revenue-side KPIs/charts.
     # See docs/superpowers/specs/2026-08-29-transactions-service-design.md.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/transactions-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@transactions-service-db:5432/transactions_service_db
       INVOICE_SERVICE_URL: http://invoice-service:8002
@@ -509,10 +540,10 @@ services:
     # best-effort — same pattern Invoice Service's send-to-accounting hook
     # uses. See docs/superpowers/specs/2026-08-29-hr-service-design.md.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/hr-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@hr-service-db:5432/hr_service_db
       TRANSACTIONS_SERVICE_URL: http://transactions-service:8003
@@ -532,10 +563,10 @@ services:
     # files. No other service dependency either — unlike HR/Invoice's
     # booking hooks, nothing here calls out to another service.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/procurement-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@procurement-service-db:5432/procurement_service_db
       # Behind the Gateway, X-Company-ID is written from verified JWT claims,
@@ -554,10 +585,10 @@ services:
     # dependency: every row is a lazily-created, company-scoped singleton
     # with defaults (see routes/*.py's own _get_or_create).
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/settings-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@settings-service-db:5432/settings_service_db
       # Behind the Gateway, X-Company-ID is written from verified JWT claims,
@@ -578,10 +609,10 @@ services:
     # on demand from a stored JSON payload rather than pre-rendered files.
     # See docs/superpowers/specs/2026-08-29-reports-service-design.md.
     build:
-      context: ..
+      context: ./backend
       dockerfile: services/reports-service/Dockerfile
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@reports-service-db:5432/reports_service_db
       INVOICE_SERVICE_URL: http://invoice-service:8002
